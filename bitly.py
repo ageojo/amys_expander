@@ -109,7 +109,7 @@ def flatten_one_level(lists):
 def politeable(f):
     """
     Add a politeness argument, which is the number of seconds to sleep before
-    calling the deforated function.
+    calling the decorated function.
 
     """
 
@@ -146,7 +146,7 @@ class Bitly():
         return flatten_one_level(nested_hashes)
 
     @politeable
-    def _expand_batch(self, hashes, polite=False):
+    def _expand_batch(self, hashes):
         url = f'{self.API_URL}/{self.EXPAND_ENDPOINT}'
         response = requests.get(url, {'access_token': self.token,
                                       'hash': hashes})
