@@ -1,4 +1,6 @@
 import csv
+from functools import wraps
+import itertools
 from pprint import pprint
 import os
 import re
@@ -68,49 +70,108 @@ def linkify_lines(lines):
 
 def csv_write(output_lines, outfile):
     out = os.path.join(OUTPUT_DIR, outfile)
-    with open(out, 'w') as f:
+    with open(out, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerows(output_lines)
+
+
+#####################################
+# Stuff that should be in the std lib
+#####################################
+
+def bucket(items, n):
+    """
+    Breaks items into a list of lists of n items each. Order is retained:
+
+    >>> bucket([1, 2, 3, 4, 5, 6], 2)
+    [[1, 2], [3, 4], [5, 6]]
+
+    """
+
+    bucket = []
+    start = 0
+    sub = items[start:start+n]
+    while sub:
+        bucket.append(sub)
+        start += n
+        sub = items[start:start+n]
+    return bucket
+
+
+def flatten_one_level(lists):
+    return itertools.chain.from_iterable(lists)
 
 
 #################
 # Bitly API stuff
 #################
 
+def politeable(f):
+    """
+    Add a politeness argument, which is the number of seconds to sleep before
+    calling the deforated function.
+
+    """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        politeness = kwargs.pop('politeness', 0)
+        time.sleep(politeness)
+        return f(*args, **kwargs)
+
+    return wrapper
+
+
 class Bitly():
     API_URL = 'https://api-ssl.bitly.com'
     EXPAND_ENDPOINT = 'v3/expand'
+    BATCH_SIZE = 15  # https://dev.bitly.com/links.html#v3_expand
+    POLITENESS = 1  # seconds
 
     def __init__(self, token):
         self.token = token
 
-    def expand(self, bhash):
+    def expand_one(self, bhash):
         url = f'{self.API_URL}/{self.EXPAND_ENDPOINT}'
         response = requests.get(url, {'access_token': self.token,
                                       'format': 'txt',
                                       'hash': bhash})
-        expansion = response.text.strip()
-        pprint(expansion)
-        return expansion
+        return response.text.strip()
 
-    def _polite_expand(self, bhash, secs=1):
-        time.sleep(secs)
-        return self.expand(bhash)
+    def expand_all(self, hashes):
+        batches = bucket(hashes, self.BATCH_SIZE)
+        nested_hashes = [self._expand_batch(batch,
+                                            politeness=self.POLITENESS)
+                         for batch in batches]
+        return flatten_one_level(nested_hashes)
 
-    def expand_multiple(self, hashes):
-        return [self._polite_expand(bhash) for bhash in hashes]
+    @politeable
+    def _expand_batch(self, hashes, polite=False):
+        url = f'{self.API_URL}/{self.EXPAND_ENDPOINT}'
+        response = requests.get(url, {'access_token': self.token,
+                                      'hash': hashes})
+        return [item['long_url']
+                for item in response.json()['data']['expand']]
 
+
+######
+# Main
+######
 
 if __name__ == '__main__':
     lines = read_orig_file()
 
+    # Input file processing
     bitly_lines = filter_bitly(lines)
     bitly_links = linkify_lines(bitly_lines)
     bitly_hashes = extract_hashes(bitly_lines)
 
+    # Call bitly API
     token = get_token()
     bitly = Bitly(token)
-    urls = bitly.expand_multiple(bitly_hashes)
+    urls = bitly.expand_all(bitly_hashes)
+
+    # Output file processing
     output_lines = zip(bitly_lines, bitly_links, urls)
-    pprint(output_lines)
-    csv_write(output_lines, 'bitly_expansions')
+    pprint(list(output_lines))
+    csv_write(output_lines, 'bitly_expansions.csv')
